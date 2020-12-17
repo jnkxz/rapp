@@ -9,36 +9,6 @@ from astropy.wcs import WCS
 from scipy import ndimage as nd
 
 
-def background(img, n=3, p=5):
-    '''
-    当背景符合高斯分布时
-    获取全图中值与标准差会近似等于背景的均值与sigma
-    为了更加接近背景的均值与sigma
-    用当前的中值与标准差抽取n倍标准差内的元素
-    再次获取其中值与标准差
-    当 前后标准差相差小于p%时
-    认为其中值与标准差极度近似于背景的均值与sigma
-    para:
-        img:ndarray   输入图片
-        n:float         sigma倍数
-        p:float         对比阈值
-    return:
-        nmed:float      中值(近似背景均值)
-        nstd:float      标准差(近似背景sigma)
-    '''
-    ostd = np.std(img)
-    omed = np.median(img)
-    while 1:
-        mask = (img < omed + n*ostd) & (img > omed - n*ostd)
-        nstd = np.std(img[mask])
-        nmed = np.median(img[mask])
-        if np.abs(nstd - ostd)/ostd < p / 100:
-            break
-        ostd = nstd
-        omed = nmed
-    return nmed, nstd
-
-
 def circle(img, X, Y, radius):
     '''
     根据给出的星的位置进行画圈
@@ -94,7 +64,7 @@ def ap(img: np.ndarray, x: float, y: float, r: float,
     mrk = (r*inner <= distence) & (distence <= r*outer)
     sky = img[yy[mrk], xx[mrk]]
 
-    med, std = background(sky)
+    med, std = np.median(sky), np.std(sky)
     flx = np.sum(adu - med)
     with np.errstate(divide='ignore', invalid='ignore'):
         mag = -2.5 * np.log10(flx)
@@ -106,12 +76,14 @@ def ap(img: np.ndarray, x: float, y: float, r: float,
     return flx, mag, err, snr
 
 
-def find_star(hdu: fits.HDUList, n: float = 3.,
+def find_star(hdu: fits.HDUList, bias: fits.HDUList = None, flat: fits.HDUList = None, n: float = 3.,
               aperture: float = 1.2, inner: float = 2.4, outer: float = 3.6):
     '''
     从星图中找星
     para:
-        img:ndarray         输入的星图
+        hdu:HDUList         输入的星图
+        bias:HDUList        本底文件默认None
+        flat:HDUList        平场文件默认None
         n:float             sigma倍数默认3
         aperture:float      孔径对半径倍数默认1.2
         inner:float         背景内径对半径倍数默认2.4
@@ -134,12 +106,24 @@ def find_star(hdu: fits.HDUList, n: float = 3.,
             snr: float      星在图片中的信噪比
     '''
     du = hdu[1].data.astype(float)
+    if bias is not None:
+        bu = bias[1].data.astype(float)
+    else:
+        bu = 0
+
+    if flat is not None:
+        fu = flat[1].data.astype(float) - bu
+        fu = fu / np.median(fu)
+    else:
+        fu = 1
+    du = (du - bu) / fu
+
     hu = hdu[1].header
     gain = float(hu['GAIN'])
 
     wcs = WCS(hu)
 
-    m, s = background(du)
+    m, s = np.median(du), np.std(du)
     mrk = du > m + n * s
 
     lbl, num = nd.measurements.label(mrk)
